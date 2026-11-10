@@ -65,6 +65,8 @@ def predict(args: argparse.Namespace) -> None:
                 out.write(json.dumps(failed_contract(path.stem), ensure_ascii=False) + "\n")
                 written += 1
                 continue
+            if invoice["review_reasons"] == ["processing_error"]:
+                print(f"[processing_error] {path.name}: {'; '.join(invoice['warnings'])}", file=sys.stderr)
             out.write(json.dumps(to_contract(invoice), ensure_ascii=False) + "\n")
             written += 1
     print(f"wrote {written}/{len(documents)} predictions to {args.output}")

@@ -28,6 +28,31 @@ EXAMPLE = (
 )  # invented values; never real Meridian or vendor data
 
 
+class ModelOutputError(ValueError):
+    """The model's reply did not contain a JSON object we could read."""
+
+
+def parse_model_json(text: str) -> dict:
+    """Read the JSON object in a model reply.
+
+    Models often wrap their answer in a ```json fence or add a sentence before or after it, so take the
+    first complete JSON object in the text. If there is none, raise with the start of the reply so the
+    cause is visible in the logs.
+    """
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            value, _ = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(value, dict):
+            return value
+        start = text.find("{", start + 1)
+    raise ModelOutputError(f"no JSON object in the model reply; it began: {text[:300]!r}")
+
+
 def build_extraction_prompt(document_text: str, ref: ReferenceData | None = None) -> str:
     return f"""Extract the fields of the vendor document between the <document> tags.
 
@@ -76,12 +101,12 @@ def extract(document_text: str, ref: ReferenceData,
     assert_clean(first_prompt, secrets)
     first = client.complete(SYSTEM_PROMPT, first_prompt)
     calls.append(first)
-    data = json.loads(first.text)
+    data = parse_model_json(first.text)
     data = {k: v for k, v in data.items() if k not in ("bank_account", "ifsc")}  # code reads these
 
     second_prompt = build_verification_prompt(safe_text, data, ref)
     assert_clean(second_prompt, secrets)
     second = client.complete(SYSTEM_PROMPT, second_prompt)
     calls.append(second)
-    data = json.loads(second.text)
+    data = parse_model_json(second.text)
     return data, calls

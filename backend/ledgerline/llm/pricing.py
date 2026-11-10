@@ -13,6 +13,8 @@ USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-haiku-5-5": (0.10, 0.50),
     "claude-opus-4-5": (5.0, 25.0),
     "claude-sonnet-4-5": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
+    "anthropic/claude-haiku-4.5": (1.0, 5.0),   # OpenRouter name; check openrouter.ai/anthropic/claude-haiku-4.5
     "gpt-4o-mini": (0.15, 0.60),
     "fake": (0.0, 0.0),
 }
