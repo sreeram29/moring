@@ -5,7 +5,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import db
+from . import approvals, db
+from .approvals import DecisionError
 from .config import USD_TO_INR, get_settings
 from .pipeline import process_document
 from .reference import load_reference
@@ -54,37 +55,30 @@ def list_invoices(org_id: str = Depends(get_org), conn=Depends(get_conn)):
 
 
 @app.get("/api/invoices/{invoice_id}")
-def get_invoice(invoice_id: int, conn=Depends(get_conn)):
+def get_invoice(invoice_id: int, org_id: str = Depends(get_org), conn=Depends(get_conn)):
     invoice = db.get_invoice(conn, invoice_id)
-    if invoice is None:
+    if invoice is None or invoice["org_id"] != org_id:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return invoice
 
 
+def _decide(action, invoice_id: int, body: "DecisionRequest", org_id: str, conn):
+    try:
+        return action(conn, invoice_id, body.user_id, body.note, org_id=org_id)
+    except DecisionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
 @app.post("/api/invoices/{invoice_id}/approve")
-def approve_invoice(invoice_id: int, body: DecisionRequest, conn=Depends(get_conn)):
-    invoice = db.get_invoice(conn, invoice_id)
-    if invoice is None:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-    conn.execute(
-        "INSERT INTO approvals (invoice_id, user_id, note) VALUES (?, ?, ?)", (invoice_id, body.user_id, body.note)
-    )
-    approvals = conn.execute("SELECT COUNT(*) FROM approvals WHERE invoice_id = ?", (invoice_id,)).fetchone()[0]
-    status = invoice["status"]
-    if approvals >= invoice["required_approvals"]:
-        status = "approved"
-        conn.execute("UPDATE invoices SET status = 'approved' WHERE id = ?", (invoice_id,))
-        conn.execute("INSERT INTO payments (invoice_id, amount) VALUES (?, ?)", (invoice_id, invoice["total"]))
-    conn.commit()
-    return {"id": invoice_id, "approvals": approvals, "required_approvals": invoice["required_approvals"],
-            "status": status}
+def approve_invoice(invoice_id: int, body: DecisionRequest, org_id: str = Depends(get_org),
+                    conn=Depends(get_conn)):
+    return _decide(approvals.approve, invoice_id, body, org_id, conn)
 
 
 @app.post("/api/invoices/{invoice_id}/reject")
-def reject_invoice(invoice_id: int, body: DecisionRequest, conn=Depends(get_conn)):
-    conn.execute("UPDATE invoices SET status = 'rejected' WHERE id = ?", (invoice_id,))
-    conn.commit()
-    return {"id": invoice_id, "status": "rejected"}
+def reject_invoice(invoice_id: int, body: DecisionRequest, org_id: str = Depends(get_org),
+                   conn=Depends(get_conn)):
+    return _decide(approvals.reject, invoice_id, body, org_id, conn)
 
 
 @app.get("/api/stats")

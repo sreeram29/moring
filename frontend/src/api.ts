@@ -43,6 +43,7 @@ export type DecisionResult = {
   status: string;
   approvals?: number;
   required_approvals?: number;
+  already_recorded?: boolean;
 };
 
 const orgHeaders = { "X-Org-Id": ORG_ID };
@@ -71,7 +72,11 @@ async function decide(id: number, action: "approve" | "reject", note: string): P
     headers: { ...orgHeaders, "Content-Type": "application/json" },
     body: JSON.stringify({ user_id: CURRENT_USER, note }),
   });
-  return response.json();
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof result.detail === "string" ? result.detail : `Request failed (HTTP ${response.status})`);
+  }
+  return result;
 }
 
 export const approveInvoice = (id: number, note: string) => decide(id, "approve", note);

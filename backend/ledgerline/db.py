@@ -50,6 +50,16 @@ CREATE TABLE IF NOT EXISTS payments (
     amount REAL NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+    user_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_approvals_invoice_user ON approvals(invoice_id, user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_payments_invoice ON payments(invoice_id);
 CREATE TABLE IF NOT EXISTS llm_calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     invoice_id INTEGER REFERENCES invoices(id),

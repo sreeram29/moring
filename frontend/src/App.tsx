@@ -22,12 +22,14 @@ export default function App() {
   const [selected, setSelected] = useState<Invoice | null>(null);
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
 
   // Keep the queue fresh while documents are being processed.
   useEffect(() => {
-    setInterval(() => {
-      listInvoices().then(setInvoices);
-    }, 500);
+    const timer = setInterval(() => {
+      listInvoices().then(setInvoices).catch(() => undefined);
+    }, 2000);
+    return () => clearInterval(timer);
   }, []);
 
   async function open(id: number) {
@@ -49,18 +51,29 @@ export default function App() {
     event.target.value = "";
   }
 
-  async function approve() {
-    if (!selected) return;
-    const result = await approveInvoice(selected.id, note);
-    setMessage(`Approval recorded (${result.approvals} of ${result.required_approvals})`);
-    setSelected(await getInvoice(selected.id));
-  }
-
-  async function reject() {
-    if (!selected) return;
-    await rejectInvoice(selected.id, note);
-    setMessage("Document rejected");
-    setSelected(await getInvoice(selected.id));
+  // One decision at a time: a second click while the first is in flight is ignored, and the server
+  // treats a repeated approval from the same person as already recorded.
+  async function decide(kind: "approve" | "reject") {
+    if (!selected || busy) return;
+    setBusy(true);
+    try {
+      if (kind === "approve") {
+        const result = await approveInvoice(selected.id, note);
+        setMessage(
+          result.already_recorded
+            ? "Your approval was already recorded"
+            : `Approval recorded (${result.approvals} of ${result.required_approvals})`,
+        );
+      } else {
+        await rejectInvoice(selected.id, note);
+        setMessage("Document rejected");
+      }
+      setSelected(await getInvoice(selected.id));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -161,7 +174,7 @@ export default function App() {
               {selected.notes && (
                 <div className="callout">
                   <h3>Notes on the document</h3>
-                  <div dangerouslySetInnerHTML={{ __html: selected.notes }} />
+                  <p>{selected.notes}</p>
                 </div>
               )}
 
@@ -193,8 +206,10 @@ export default function App() {
               <div className="decision">
                 <textarea placeholder="Note for the audit log" value={note} onChange={(e) => setNote(e.target.value)} />
                 <div className="actions">
-                  <button onClick={approve}>Approve</button>
-                  <button className="secondary" onClick={reject}>
+                  <button onClick={() => decide("approve")} disabled={busy}>
+                    Approve
+                  </button>
+                  <button className="secondary" onClick={() => decide("reject")} disabled={busy}>
                     Reject
                   </button>
                 </div>
