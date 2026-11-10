@@ -1,6 +1,8 @@
 """Process one document end to end: extract -> normalise -> check -> route -> persist."""
 from __future__ import annotations
 
+import re
+
 import json
 import sqlite3
 from dataclasses import asdict
@@ -15,7 +17,26 @@ from .reference import ReferenceData
 from .validation import compute_reasons, find_vendor, required_approvals
 
 
-def normalize(data: dict, ref: ReferenceData | None = None) -> Invoice:
+_FOREIGN = [("USD", r"\$|\bUSD\b"), ("EUR", r"€|\bEUR\b"), ("GBP", r"£|\bGBP\b")]
+_INDIAN = r"₹|\bRs\.?|\bINR\b|\bGSTIN\b|\bGstin\b|\bIrn\b|\bCGST\b|\bIGST\b"
+
+
+def infer_currency(raw_text: str | None) -> str:
+    """Only used when the model returned no currency (e-invoice JSON has no currency field).
+
+    Indian markers and no foreign marker -> INR; exactly one foreign currency and no Indian marker -> that one.
+    Anything mixed or empty stays unreadable, because guessing INR would switch off the foreign-currency rules."""
+    text = raw_text or ""
+    found = [code for code, pat in _FOREIGN if re.search(pat, text)]
+    indian = bool(re.search(_INDIAN, text))
+    if indian and not found:
+        return "INR"
+    if len(found) == 1 and not indian:
+        return found[0]
+    return ""
+
+
+def normalize(data: dict, ref: ReferenceData | None = None, raw_text: str | None = None) -> Invoice:
     items = [
         LineItem(
             description=str(item.get("description", "")),
@@ -25,14 +46,14 @@ def normalize(data: dict, ref: ReferenceData | None = None) -> Invoice:
         )
         for item in data.get("line_items") or []
     ]
-    currency = (data.get("currency") or "").strip().upper()
+    currency = (data.get("currency") or "").strip().upper() or infer_currency(raw_text)
     if not currency:  # never assume INR: it would switch off the foreign-currency rules
         raise ValueError("the document's currency could not be read")
     inv = Invoice(
         document_type=data.get("document_type") or "invoice",
-        supplier_name=data.get("supplier_name"),
+        supplier_name=" ".join(data["supplier_name"].split()) if data.get("supplier_name") else None,
         supplier_gstin=data.get("supplier_gstin"),
-        invoice_number=data.get("invoice_number"),
+        invoice_number=re.sub(r"\s*([/\-])\s*", r"\1", str(data["invoice_number"]).strip()) if data.get("invoice_number") else None,
         invoice_date=None,
         currency=currency,
         subtotal=parse_amount(data.get("subtotal")),
@@ -73,7 +94,7 @@ def process_document(
     warnings: list[str] = []
     try:
         data, _ = extract(raw_text, ref, calls=responses)
-        inv = normalize(data, ref)
+        inv = normalize(data, ref, raw_text)
         accounts, ifscs = bank_details(raw_text)  # read by code; the provider never saw the full number
         inv.bank_account = accounts[0] if accounts else None
         inv.ifsc = ifscs[0] if ifscs else None

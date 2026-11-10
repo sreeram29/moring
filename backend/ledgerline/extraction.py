@@ -108,5 +108,8 @@ def extract(document_text: str, ref: ReferenceData,
     assert_clean(second_prompt, secrets)
     second = client.complete(SYSTEM_PROMPT, second_prompt)
     calls.append(second)
-    data = parse_model_json(second.text)
+    try:
+        data = parse_model_json(second.text)
+    except ModelOutputError:  # the check pass is a bonus: keep the first pass rather than lose the document
+        pass
     return data, calls

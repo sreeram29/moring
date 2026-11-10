@@ -6,6 +6,7 @@ Money is compared as Decimal, never as binary floats.
 """
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from datetime import date
@@ -210,6 +211,45 @@ def check_processable(inv: Invoice) -> list[str]:
 
 # ---------------------------------------------------------------- the decision
 
+# ---- optional rulings (RULINGS.md): off unless LEDGERLINE_FLAG_<NAME>=1 ---------------------------------------
+
+def flag_on(name: str) -> bool:
+    return os.getenv(f"LEDGERLINE_FLAG_{name}", "").strip() == "1"
+
+
+def check_line_arithmetic(inv: Invoice) -> list[str]:
+    """Flag LINE_ARITHMETIC: a line whose quantity x rate differs from its printed amount by more than 5 paise.
+    The written policy only checks that the lines add up to the subtotal, which a wrong line plus a
+    matching subtotal passes (disp_05)."""
+    for item in inv.line_items:
+        if item.quantity is None or item.unit_price is None:
+            continue
+        if abs(D(item.quantity) * D(item.unit_price) - D(item.amount)) > Decimal("0.05"):
+            return ["line_amount_mismatch"]
+    return []
+
+
+def _sent_date(raw_text: str) -> date | None:
+    match = re.search(r"^Date:\s*(.+)$", raw_text or "", re.M)
+    if not match:
+        return None
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(match.group(1).strip()).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def check_future_date(inv: Invoice, raw_text: str) -> list[str]:
+    """Flag FUTURE_DATE: an invoice dated after the day it reached us (the email's Date header when there is
+    one, otherwise today, or LEDGERLINE_AS_OF=YYYY-MM-DD for replaying an old snapshot)."""
+    if inv.invoice_date is None:
+        return []
+    as_of = os.getenv("LEDGERLINE_AS_OF", "").strip()
+    reference = _sent_date(raw_text) or (date.fromisoformat(as_of) if as_of else date.today())
+    return ["invoice_date_in_future"] if inv.invoice_date > reference else []
+
+
 def compute_reasons(conn: sqlite3.Connection, ref: ReferenceData, inv: Invoice, raw_text: str = "",
                     org_id: str = "meridian") -> list[str]:
     vendor = find_vendor(ref, inv)
@@ -226,6 +266,10 @@ def compute_reasons(conn: sqlite3.Connection, ref: ReferenceData, inv: Invoice, 
     reasons += check_foreign_currency(inv)
     reasons += check_suspicious(raw_text, inv.notes)
     reasons += check_processable(inv)
+    if flag_on("LINE_ARITHMETIC"):
+        reasons += check_line_arithmetic(inv)
+    if flag_on("FUTURE_DATE"):
+        reasons += check_future_date(inv, raw_text)
     return reasons
 
 

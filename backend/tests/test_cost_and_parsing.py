@@ -47,12 +47,20 @@ def test_price_can_be_set_by_environment_for_local_models(monkeypatch):
 
 
 def test_a_call_that_was_made_is_billed_even_if_the_document_then_fails(conn, ref, monkeypatch):
-    client = FakeClient([json.dumps(CANNED_EXTRACTION), "this is not json"], model="claude-sonnet-5-5")
+    client = FakeClient(["this is not json"], model="claude-sonnet-5-5")
     monkeypatch.setattr("ledgerline.extraction.get_client", lambda: client)
     out = process_document(conn, ref, "x" * 4000, "doc_fail")
     assert out["review_reasons"] == ["processing_error"]
-    assert out["usage"]["llm_calls"] == 2          # both responses were paid for
+    assert out["usage"]["llm_calls"] == 1          # the response that came back was paid for
     assert out["usage"]["cost_inr"] > 0
+
+
+def test_an_unreadable_check_pass_keeps_the_first_extraction(conn, ref, monkeypatch):
+    client = FakeClient([json.dumps(CANNED_EXTRACTION), ""], model="claude-sonnet-5-5")
+    monkeypatch.setattr("ledgerline.extraction.get_client", lambda: client)
+    out = process_document(conn, ref, "x" * 4000, "doc_ok")
+    assert "processing_error" not in out["review_reasons"]
+    assert out["usage"]["llm_calls"] == 2
 
 
 def test_typical_document_cost_is_in_the_right_order_of_magnitude():

@@ -16,6 +16,7 @@ USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (1.0, 5.0),
     "anthropic/claude-haiku-4.5": (1.0, 5.0),   # OpenRouter name; check openrouter.ai/anthropic/claude-haiku-4.5
     "google/gemma-4-31b-it:free": (0.0, 0.0),   # OpenRouter free tier
+    "deepseek/deepseek-v4.1-flash-1017": (0.006, 0.5),
     "gpt-4o-mini": (0.15, 0.60),
     "fake": (0.0, 0.0),
 }

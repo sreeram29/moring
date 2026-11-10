@@ -35,3 +35,17 @@ def test_a_fenced_reply_is_processed_normally_not_sent_to_review_as_an_error(con
     out = process_document(conn, ref, "INVOICE TEXT", "doc_fenced")
     assert "processing_error" not in out["review_reasons"]
     assert out["supplier_name"] == CANNED_EXTRACTION["supplier_name"]
+
+
+def test_currency_is_inferred_only_when_the_text_is_unambiguous():
+    from ledgerline.pipeline import infer_currency
+    assert infer_currency('{"Gstin": "27AAACK9034R1ZX", "TotInvVal": 72275.0}') == "INR"
+    assert infer_currency("Total due (USD) $1,298.00") == "USD"
+    assert infer_currency("Total $100 and Rs 200") == ""
+    assert infer_currency("") == ""
+
+
+def test_normalize_uses_the_text_when_the_model_gave_no_currency():
+    from ledgerline.pipeline import normalize
+    inv = normalize({"supplier_name": "Konkan  Tooling Pvt. Ltd."}, None, "GSTIN 27AAACK9034R1ZX Rs 10")
+    assert inv.currency == "INR" and inv.supplier_name == "Konkan Tooling Pvt. Ltd."
