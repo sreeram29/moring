@@ -12,6 +12,7 @@ from datetime import date
 from decimal import Decimal
 
 from .models import Invoice
+from .privacy import bank_details
 from .reference import ReferenceData
 
 GSTIN_PATTERN = re.compile(r"\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]")
@@ -172,12 +173,21 @@ def check_duplicate(conn: sqlite3.Connection, ref: ReferenceData, inv: Invoice, 
     return []
 
 
-def check_bank_details(inv: Invoice, vendor: dict | None) -> list[str]:
+def check_bank_details(inv: Invoice, vendor: dict | None, raw_text: str = "") -> list[str]:
+    """Any account number or IFSC printed in the document that differs from the vendor's record.
+
+    Bank details come from the original document (privacy.bank_details), not from the model, so a
+    second "pay here instead" account further down the page is caught too.
+    """
     if not vendor:
         return []
-    acct, v_acct = _digits(inv.bank_account), _digits(vendor.get("bank_account"))
-    ifsc, v_ifsc = (inv.ifsc or "").strip().upper(), (vendor.get("ifsc") or "").strip().upper()
-    if (acct and v_acct and acct != v_acct) or (ifsc and v_ifsc and ifsc != v_ifsc):
+    accounts, ifscs = bank_details(raw_text)
+    accounts = accounts or ([_digits(inv.bank_account)] if inv.bank_account else [])
+    ifscs = ifscs or ([inv.ifsc.strip().upper()] if inv.ifsc else [])
+    v_acct, v_ifsc = _digits(vendor.get("bank_account")), (vendor.get("ifsc") or "").strip().upper()
+    if v_acct and any(a and a != v_acct for a in accounts):
+        return ["bank_details_changed"]
+    if v_ifsc and any(i and i != v_ifsc for i in ifscs):
         return ["bank_details_changed"]
     return []
 
@@ -210,7 +220,7 @@ def compute_reasons(conn: sqlite3.Connection, ref: ReferenceData, inv: Invoice, 
     reasons += check_gstin(inv)
     reasons += check_vendor(vendor)
     reasons += check_new_vendor(inv, vendor)
-    reasons += check_bank_details(inv, vendor)
+    reasons += check_bank_details(inv, vendor, raw_text)
     reasons += check_tax_type(inv, str(ref.buyer.get("state_code", "27")))
     reasons += check_totals(inv)
     reasons += check_foreign_currency(inv)

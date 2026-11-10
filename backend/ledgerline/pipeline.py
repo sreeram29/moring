@@ -9,6 +9,7 @@ from . import db
 from .extraction import extract
 from .llm.pricing import cost_usd
 from .models import Invoice, LineItem
+from .privacy import bank_details
 from .parsing import parse_amount, parse_date
 from .reference import ReferenceData
 from .validation import compute_reasons, required_approvals
@@ -65,6 +66,9 @@ def process_document(
     try:
         data, responses = extract(raw_text, ref)
         inv = normalize(data)
+        accounts, ifscs = bank_details(raw_text)  # read by code; the provider never saw the full number
+        inv.bank_account = accounts[0] if accounts else None
+        inv.ifsc = ifscs[0] if ifscs else None
         # Routing is decided by code (validation.py). Whatever the model claims is only a warning.
         review_reasons = list(dict.fromkeys(compute_reasons(conn, ref, inv, raw_text, org_id)))
         model_reasons = sorted({str(r) for r in (data.get("review_reasons") or [])})
