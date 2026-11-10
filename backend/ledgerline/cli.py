@@ -35,19 +35,35 @@ def to_contract(invoice: dict) -> dict:
     return out
 
 
+def failed_contract(document_id: str) -> dict:
+    """The line for a document that could not be processed at all (OUTPUT_CONTRACT: never skip)."""
+    zero = "0.00"
+    return {
+        "document_id": document_id, "document_type": "invoice", "supplier_name": "", "supplier_gstin": None,
+        "invoice_number": "", "invoice_date": "", "currency": "INR", "subtotal": zero, "cgst": zero,
+        "sgst": zero, "igst": zero, "round_off": zero, "total": zero, "bank_account": None, "ifsc": None,
+        "po_number": None, "line_items": [], "needs_review": True, "review_reasons": ["processing_error"],
+        "required_approvals": 1,
+        "usage": {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_inr": 0.0, "latency_ms": 0},
+    }
+
+
 def predict(args: argparse.Namespace) -> None:
     ref = load_reference(args.reference)
     db_path = args.db or str(Path(tempfile.mkdtemp(prefix="ledgerline-")) / "predict.db")
     conn = db.connect(db_path)
-    documents = sorted(p for p in Path(args.input).iterdir() if p.suffix in SUPPORTED_SUFFIXES)
+    documents = sorted((p for p in Path(args.input).iterdir() if p.suffix in SUPPORTED_SUFFIXES),
+                       key=lambda p: p.stem)
     written = 0
     with open(args.output, "w", encoding="utf-8") as out:
         for path in documents:
             try:
-                invoice = process_document(conn, ref, path.read_text(encoding="utf-8"), path.stem,
+                invoice = process_document(conn, ref, path.read_text(encoding="utf-8", errors="replace"), path.stem,
                                            filename=path.name)
-            except Exception as exc:  # keep the batch going
-                print(f"[skip] {path.name}: {exc}", file=sys.stderr)
+            except Exception as exc:  # never skip a document: write it as a processing_error
+                print(f"[processing_error] {path.name}: {exc}", file=sys.stderr)
+                out.write(json.dumps(failed_contract(path.stem), ensure_ascii=False) + "\n")
+                written += 1
                 continue
             out.write(json.dumps(to_contract(invoice), ensure_ascii=False) + "\n")
             written += 1

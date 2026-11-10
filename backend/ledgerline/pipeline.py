@@ -11,9 +11,7 @@ from .llm.pricing import cost_usd
 from .models import Invoice, LineItem
 from .parsing import parse_amount, parse_date
 from .reference import ReferenceData
-from .validation import run_checks
-
-HIGH_VALUE_THRESHOLD = 500000  # invoices above this need two approvals
+from .validation import compute_reasons, required_approvals
 
 
 def normalize(data: dict) -> Invoice:
@@ -47,6 +45,12 @@ def normalize(data: dict) -> Invoice:
     )
 
 
+def blank_invoice() -> Invoice:
+    """Placeholder for a document we could not read; it is stored and routed as processing_error."""
+    return Invoice("invoice", None, None, None, None, "INR", None, 0.0, 0.0, 0.0, 0.0, None, None, None,
+                   None, None, [])
+
+
 def process_document(
     conn: sqlite3.Connection,
     ref: ReferenceData,
@@ -55,14 +59,23 @@ def process_document(
     org_id: str = "meridian",
     filename: str | None = None,
 ) -> dict:
-    data, responses = extract(raw_text, ref)
-    inv = normalize(data)
-    warnings = run_checks(conn, ref, inv)
-
-    # v0.3: the model applies the AP policy itself (it has the full policy text in its prompt).
-    needs_review = bool(data.get("requires_review", False))
-    review_reasons = list(data.get("review_reasons") or [])
-    required_approvals = 2 if (inv.total or 0) > HIGH_VALUE_THRESHOLD else 1
+    data: dict = {}
+    responses: list = []
+    warnings: list[str] = []
+    try:
+        data, responses = extract(raw_text, ref)
+        inv = normalize(data)
+        # Routing is decided by code (validation.py). Whatever the model claims is only a warning.
+        review_reasons = list(dict.fromkeys(compute_reasons(conn, ref, inv, raw_text, org_id)))
+        model_reasons = sorted({str(r) for r in (data.get("review_reasons") or [])})
+        if model_reasons != sorted(review_reasons):
+            warnings.append(f"model proposed {model_reasons}; policy engine decided {sorted(review_reasons)}")
+    except Exception as exc:  # never drop a document: store it and send it to a human
+        inv = blank_invoice()
+        review_reasons = ["processing_error"]
+        warnings.append(f"processing_error: {type(exc).__name__}: {exc}")
+    needs_review = bool(review_reasons)
+    approvals_needed = required_approvals(inv)
     status = "needs_review" if needs_review else "ready_for_approval"
 
     cur = conn.execute(
@@ -76,7 +89,7 @@ def process_document(
             inv.invoice_number, inv.invoice_date.isoformat() if inv.invoice_date else None, inv.currency,
             inv.subtotal, inv.cgst, inv.sgst, inv.igst, inv.round_off, inv.total, inv.bank_account, inv.ifsc,
             inv.po_number, inv.notes, json.dumps([asdict(i) for i in inv.line_items]), json.dumps(warnings),
-            int(needs_review), json.dumps(review_reasons), required_approvals, status,
+            int(needs_review), json.dumps(review_reasons), approvals_needed, status,
         ),
     )
     invoice_id = cur.lastrowid
