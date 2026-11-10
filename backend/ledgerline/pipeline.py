@@ -10,28 +10,31 @@ from .extraction import extract
 from .llm.pricing import cost_usd
 from .models import Invoice, LineItem
 from .privacy import bank_details
-from .parsing import parse_amount, parse_date
+from .parsing import parse_amount, parse_date, parse_quantity
 from .reference import ReferenceData
-from .validation import compute_reasons, required_approvals
+from .validation import compute_reasons, find_vendor, required_approvals
 
 
-def normalize(data: dict) -> Invoice:
+def normalize(data: dict, ref: ReferenceData | None = None) -> Invoice:
     items = [
         LineItem(
             description=str(item.get("description", "")),
-            quantity=parse_amount(item.get("quantity")),
+            quantity=parse_quantity(item.get("quantity")),
             unit_price=parse_amount(item.get("unit_price")),
             amount=parse_amount(item.get("amount")) or 0.0,
         )
         for item in data.get("line_items") or []
     ]
-    return Invoice(
+    currency = (data.get("currency") or "").strip().upper()
+    if not currency:  # never assume INR: it would switch off the foreign-currency rules
+        raise ValueError("the document's currency could not be read")
+    inv = Invoice(
         document_type=data.get("document_type") or "invoice",
         supplier_name=data.get("supplier_name"),
         supplier_gstin=data.get("supplier_gstin"),
         invoice_number=data.get("invoice_number"),
-        invoice_date=parse_date(data.get("invoice_date")),
-        currency=data.get("currency") or "INR",
+        invoice_date=None,
+        currency=currency,
         subtotal=parse_amount(data.get("subtotal")),
         cgst=parse_amount(data.get("cgst")) or 0.0,
         sgst=parse_amount(data.get("sgst")) or 0.0,
@@ -44,6 +47,11 @@ def normalize(data: dict) -> Invoice:
         notes=data.get("notes"),
         line_items=items,
     )
+    # US vendors print dates month first; everyone else day first (AP_POLICY section 1)
+    vendor = find_vendor(ref, inv) if ref is not None else None
+    month_first = bool(vendor and (vendor.get("country") or "").upper() == "US")
+    inv.invoice_date = parse_date(data.get("invoice_date"), month_first=month_first)
+    return inv
 
 
 def blank_invoice() -> Invoice:
@@ -64,8 +72,8 @@ def process_document(
     responses: list = []
     warnings: list[str] = []
     try:
-        data, responses = extract(raw_text, ref)
-        inv = normalize(data)
+        data, _ = extract(raw_text, ref, calls=responses)
+        inv = normalize(data, ref)
         accounts, ifscs = bank_details(raw_text)  # read by code; the provider never saw the full number
         inv.bank_account = accounts[0] if accounts else None
         inv.ifsc = ifscs[0] if ifscs else None

@@ -60,8 +60,13 @@ EXTRACTION:
 """
 
 
-def extract(document_text: str, ref: ReferenceData) -> tuple[dict, list[LLMResponse]]:
-    """Two passes: extract, then let the model double-check its own work."""
+def extract(document_text: str, ref: ReferenceData,
+            calls: list[LLMResponse] | None = None) -> tuple[dict, list[LLMResponse]]:
+    """Two passes: extract, then let the model double-check its own work.
+
+    Every response is appended to `calls` the moment it arrives, so the caller can bill calls that were
+    made even when a later step raises."""
+    calls = calls if calls is not None else []
     accounts, _ = bank_details(document_text)
     secrets = accounts + [v.get("bank_account") for v in ref.vendors]
     safe_text = mask_document(document_text)
@@ -70,11 +75,13 @@ def extract(document_text: str, ref: ReferenceData) -> tuple[dict, list[LLMRespo
     first_prompt = build_extraction_prompt(safe_text, ref)
     assert_clean(first_prompt, secrets)
     first = client.complete(SYSTEM_PROMPT, first_prompt)
+    calls.append(first)
     data = json.loads(first.text)
     data = {k: v for k, v in data.items() if k not in ("bank_account", "ifsc")}  # code reads these
 
     second_prompt = build_verification_prompt(safe_text, data, ref)
     assert_clean(second_prompt, secrets)
     second = client.complete(SYSTEM_PROMPT, second_prompt)
+    calls.append(second)
     data = json.loads(second.text)
-    return data, [first, second]
+    return data, calls

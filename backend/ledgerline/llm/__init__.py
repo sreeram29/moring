@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from ..config import get_settings
 from .base import LLMClient, LLMResponse
+from .pricing import price_for
 
 __all__ = ["LLMClient", "LLMResponse", "get_client"]
 
 
 def get_client() -> LLMClient:
     settings = get_settings()
+    price_for(settings.llm_model if settings.llm_provider != "fake" else "fake")  # no silent Rs 0 costs
     if settings.llm_provider == "anthropic":
         from .anthropic_client import AnthropicClient
 

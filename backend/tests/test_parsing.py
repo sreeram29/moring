@@ -23,8 +23,9 @@ def test_parse_date_iso():
     assert parse_date("2026-04-25") == date(2026, 4, 25)
 
 
-def test_parse_date_with_slashes():
-    assert parse_date("03/04/2026") == date(2026, 3, 4)
+def test_parse_date_with_slashes_is_day_first():
+    # AP_POLICY section 1: Indian vendors print DD/MM/YYYY. The old test expected 3 March, which is wrong.
+    assert parse_date("03/04/2026") == date(2026, 4, 3)
 
 
 def test_parse_date_day_first_when_unambiguous():
