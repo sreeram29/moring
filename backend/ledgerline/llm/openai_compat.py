@@ -12,6 +12,20 @@ import httpx
 from .base import LLMResponse
 
 
+RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}  # transient; 401/402/403/404 are not retried
+MAX_RETRIES = 3
+
+
+def _wait_seconds(attempt: int, response: httpx.Response | None) -> float:
+    """Honour Retry-After when the provider sends it, otherwise back off 1s, 2s, 4s."""
+    if response is not None:
+        try:
+            return min(float(response.headers.get("retry-after", "")), 30.0)
+        except ValueError:
+            pass
+    return float(min(2 ** attempt, 20))
+
+
 class OpenAICompatClient:
     def __init__(self, base_url: str, api_key: str | None, model: str, timeout: float = 120.0):
         self.base_url = base_url.rstrip("/")
@@ -19,19 +33,31 @@ class OpenAICompatClient:
         self.model = model
         self.timeout = timeout
 
+    def _post_with_retries(self, headers: dict, payload: dict) -> httpx.Response:
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = httpx.post(f"{self.base_url}/chat/completions", headers=headers,
+                                      timeout=self.timeout, json=payload)
+            except (httpx.TimeoutException, httpx.TransportError):
+                if attempt == MAX_RETRIES:
+                    raise
+                time.sleep(_wait_seconds(attempt, None))
+                continue
+            if response.status_code in RETRY_STATUS and attempt < MAX_RETRIES:
+                time.sleep(_wait_seconds(attempt, response))
+                continue
+            return response
+        raise RuntimeError("unreachable")
+
     def complete(self, system: str, prompt: str, max_tokens: int = 2000) -> LLMResponse:
         started = time.monotonic()
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        response = httpx.post(
-            f"{self.base_url}/chat/completions",
-            headers=headers,
-            timeout=self.timeout,
-            json={
-                "model": self.model,
-                "max_tokens": max_tokens,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-            },
-        )
+        payload = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        }
+        response = self._post_with_retries(headers, payload)
         response.raise_for_status()
         body = response.json()
         usage = body.get("usage") or {}
